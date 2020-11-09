@@ -1,0 +1,8 @@
+version: '3'
+services:
+  node:
+    image: node:12-alpine
+    working_dir: /project
+    volumes:
+      - ./:/project
+    env_file: .env

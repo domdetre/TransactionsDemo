@@ -1,0 +1,356 @@
+service: transactions-demo
+
+plugins:
+  - serverless-s3-deploy
+
+custom:
+  importTransactionsFileBatch: ${opt:importTransactionsFileBatch, 1}
+  importTransactionsDataBatch: ${opt:importTransactionsDataBatch, 1}
+  rds:
+    instanceType: ${opt:rdsInstanceType, 'db.t2.micro'}
+    storageSize: ${opt:rdsStorageSize, '20'}
+    engine: postgres
+    database:
+      name: transactions
+      user: transactions
+      host: { Fn::GetAtt: [TransactionsDatabase, Endpoint.Address] }
+
+  assets:
+    auto: true
+    targets:
+      - bucket: ${self:provider.stackName}-frontend-bucket
+        files:
+        - source: source/frontend/
+          globs: '**/*'
+
+provider:
+  name: aws
+  region: ${opt:region, 'eu-central-1'}
+  stage: ${opt:stage, 'dev'}
+  stackName: ${self:service}-${self:provider.stage}
+  timeout: 30
+
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:GetItem
+        - dynamodb:Query
+        - dynamodb:PutItem
+        - dynamodb:DeleteItem
+      Resource:
+        - Fn::GetAtt: [TransactionsTable, Arn]
+        - Fn::Join:
+            - '/'
+            - - { Fn::GetAtt: [TransactionsTable, Arn] }
+              - '*'
+    - Effect: Allow
+      Action:
+        - s3:GetObject
+      Resource:
+        Fn::Join:
+          - '/'
+          - - { Fn::GetAtt: [ImporterBucket, Arn] }
+            - '*'
+    - Effect: Allow
+      Action:
+        - sqs:SendMessage
+      Resource:
+        Fn::GetAtt: [DataImportQueue, Arn]
+
+  environment:
+    DYNAMODB_TABLE_TRANSACTIONS:
+      Ref: TransactionsTable
+    S3_BUCKET_IMPORTER: 
+      Ref: ImporterBucket
+    QUEUE_IMPORT_DATA:
+      Ref: DataImportQueue
+    RDS_HOST:     
+      Fn::GetAtt: [TransactionsDatabase, Endpoint.Address]
+    RDS_NAME: ${self:custom.rds.database.name}
+    RDS_USER: ${self:custom.rds.database.user}
+    RDS_PASS: 
+      Fn::Sub: '{{resolve:secretsmanager:${TransactionsDatabaseSecret}::password}}'
+
+layers:
+  NodeJs:
+    path: source
+    package:
+      include:
+        - 'nodejs/node_modules/**'
+
+package:
+  include:
+    - 'source/nodejs/*.js'
+    - 'source/frontend/**'
+  exclude:
+    - '**/*'
+
+functions:
+  getPosition:
+    handler: source/nodejs/handlers.getPosition
+    layers:
+      - { Ref: NodeJsLambdaLayer }
+    events:
+      - http:
+          method: get
+          path: position
+
+  getTransactions:
+    handler: source/nodejs/handlers.getTransactions
+    layers:
+      - { Ref: NodeJsLambdaLayer }
+    events:
+      - http:
+          method: get
+          path: transactions
+
+  postTransactions:
+    handler: source/nodejs/handlers.postTransaction
+    layers:
+      - { Ref: NodeJsLambdaLayer }
+    events:
+      - http:
+          method: post
+          path: transactions
+    
+  importTransactionsFile:
+    handler: source/nodejs/handlers.importTransactionsFile
+    timeout: 300
+    layers:
+      - { Ref: NodeJsLambdaLayer }
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt: [FileImportQueue, Arn]
+          batchSize: ${self:custom.importTransactionsFileBatch}
+
+  importTransactionsData:
+    handler: source/nodejs/handlers.importTransactionsData
+    layers:
+      - { Ref: NodeJsLambdaLayer }
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt: [DataImportQueue, Arn]
+          batchSize: ${self:custom.importTransactionsDataBatch}
+
+  mirrorTransaction:
+    handler: source/nodejs/handlers.mirrorTransaction
+    layers:
+      - { Ref: NodeJsLambdaLayer }
+    events:
+      - stream:
+          type: dynamodb
+          arn:
+            Fn::GetAtt: [TransactionsTable, StreamArn]
+
+resources:
+  Resources:
+
+    TransactionsDatabaseSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: SecurityGroup for the Database of Transactions
+        GroupName: ${self:provider.stackName}-TransactionsDatabase
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: 3306
+            ToPort: 3306
+            CidrIp: 0.0.0.0/0
+
+    FrontendBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:provider.stackName}-frontend-bucket
+        WebsiteConfiguration:
+          IndexDocument: index.html
+
+    FrontendBucketPolicy:
+      Type: 'AWS::S3::BucketPolicy'
+      Properties:
+        Bucket:
+          Ref: FrontendBucket
+        PolicyDocument:
+          Statement:
+            - Effect: Allow
+              Action:
+                - 's3:GetObject'
+              Resource:
+                Fn::Join:
+                  - '/'
+                  - - { Fn::GetAtt: [FrontendBucket, Arn] }
+                    - '*'
+              Principal: '*'
+
+    ImporterBucket:
+      DependsOn:
+        - FileImportQueue
+        - FileImportQueuePolicy
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:provider.stackName}-importer-bucket
+        NotificationConfiguration:
+          QueueConfigurations:
+            - Queue:
+                Fn::GetAtt: [FileImportQueue, Arn]
+              Event: s3:ObjectCreated:*
+        CorsConfiguration:
+          CorsRules:
+            - AllowedMethods:
+                - HEAD
+                - GET
+                - PUT
+                - POST
+              AllowedOrigins: 
+                - '*'
+              AllowedHeaders:
+                - '*'
+        Tags:
+          - Key: Stack
+            Value: ${self:provider.stackName}
+    
+    FileImportQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: file-import-${self:provider.stackName}
+        VisibilityTimeout: 400
+        RedrivePolicy:
+          deadLetterTargetArn:
+            Fn::GetAtt: [FileImportFailedQueue, Arn]
+          maxReceiveCount: 1
+        Tags:
+          - Key: Stack
+            Value: ${self:provider.stackName}
+
+    FileImportFailedQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: file-import-failed-${self:provider.stackName}
+        Tags:
+          - Key: Stack
+            Value: ${self:provider.stackName}
+    
+    FileImportQueuePolicy: 
+      DependsOn:
+        - FileImportQueue
+      Type: AWS::SQS::QueuePolicy
+      Properties: 
+        Queues: 
+          - { Ref: FileImportQueue }
+        PolicyDocument: 
+          Statement: 
+            - Action: 
+                - SQS:SendMessage
+              Effect: "Allow"
+              Resource: 
+                Fn::GetAtt: [FileImportQueue, Arn]
+              Principal:
+                AWS: '*'
+              Condition:
+                ArnLike:
+                  aws:SourceArn:
+                    Fn::Join:
+                      - ''
+                      - - 'arn:aws:s3:::'
+                        - ${self:provider.stackName}-importer-bucket
+    
+    DataImportQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: data-import-${self:provider.stackName}
+        VisibilityTimeout: 30
+        RedrivePolicy:
+          deadLetterTargetArn: 
+            Fn::GetAtt: [DataImportFailedQueue, Arn]
+          maxReceiveCount: 10
+        Tags:
+          - Key: Stack
+            Value: ${self:provider.stackName}
+
+    DataImportFailedQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: data-import-failed-${self:provider.stackName}
+        Tags:
+          - Key: Stack
+            Value: ${self:provider.stackName}
+
+    TransactionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties: 
+        TableName: transactions-party-${self:provider.stage}
+        AttributeDefinitions: 
+          - AttributeName: party
+            AttributeType: S
+          - AttributeName: counterparty
+            AttributeType: S
+          - AttributeName: datetime
+            AttributeType: S
+        KeySchema: 
+          - AttributeName: party
+            KeyType: HASH
+          - AttributeName: datetime
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: counterparty
+            KeySchema: 
+              - AttributeName: counterparty
+                KeyType: HASH
+              - AttributeName: datetime
+                KeyType: RANGE
+            Projection: 
+              ProjectionType: ALL
+        BillingMode: PAY_PER_REQUEST
+        StreamSpecification:
+          StreamViewType: NEW_AND_OLD_IMAGES
+        Tags:
+          - Key: Stack
+            Value: ${self:provider.stackName}
+
+    TransactionsDatabaseSecret:
+      Type: AWS::SecretsManager::Secret
+      Properties:
+        GenerateSecretString:
+          SecretStringTemplate: '{"username": "${self:custom.rds.database.user}"}'
+          GenerateStringKey: "password"
+          PasswordLength: 30
+          ExcludeCharacters: '"@/\'
+  
+    TransactionsDatabaseSecretAttachment:
+      DependsOn:
+        - TransactionsDatabase
+        - TransactionsDatabaseSecret
+      Type: AWS::SecretsManager::SecretTargetAttachment
+      Properties: 
+        SecretId: 
+          Ref: TransactionsDatabaseSecret
+        TargetId: 
+          Ref: TransactionsDatabase
+        TargetType: 
+          AWS::RDS::DBInstance
+
+    TransactionsDatabase:
+      DependsOn:
+        - TransactionsDatabaseSecurityGroup
+        - TransactionsDatabaseSecret
+      Type: AWS::RDS::DBInstance
+      Properties:
+        Engine: ${self:custom.rds.engine}
+        DBName: ${self:custom.rds.database.name}
+        DBInstanceClass: ${self:custom.rds.instanceType}
+        AllocatedStorage: ${self:custom.rds.storageSize}
+        AllowMajorVersionUpgrade: false
+        AutoMinorVersionUpgrade: true
+        BackupRetentionPeriod: 7
+        PubliclyAccessible: true
+        StorageType: gp2
+        MasterUsername: 
+          Fn::Sub: '{{resolve:secretsmanager:${TransactionsDatabaseSecret}::username}}'
+        MasterUserPassword: 
+          Fn::Sub: '{{resolve:secretsmanager:${TransactionsDatabaseSecret}::password}}'
+        VPCSecurityGroups:
+          - { Fn::GetAtt: [TransactionsDatabaseSecurityGroup, GroupId] }
+        Tags:
+          - Key: Stack
+            Value: ${self:provider.stackName}
+

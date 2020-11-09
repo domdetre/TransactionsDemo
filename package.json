@@ -1,0 +1,18 @@
+{
+  "name": "transaction-demo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "docker-compose run --rm node npx jest"
+  },
+  "author": "Detre Dominuis <dominusdetre@gmail.com>",
+  "license": "GPL-3.0-only",
+  "devDependencies": {
+    "jest": "^26.6.3",
+    "jest-aws-sdk-mock": "^1.0.2",
+    "serverless": "^2.10.0",
+    "serverless-apig-s3": "^2.0.0",
+    "serverless-s3-deploy": "^0.9.0"
+  }
+}

@@ -1,0 +1,65 @@
+{
+	"info": {
+		"_postman_id": "743ba1c1-a7a5-498a-a774-502eface3b53",
+		"name": "Transactions",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "transactions",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "transactions",
+					"host": [
+						"transactions"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "position",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{url}}/position?entity=person-a&date=2019-11-02",
+					"host": [
+						"{{url}}"
+					],
+					"path": [
+						"position"
+					],
+					"query": [
+						{
+							"key": "entity",
+							"value": "person-a"
+						},
+						{
+							"key": "date",
+							"value": "2019-11-02"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "transactions",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "transactions",
+					"host": [
+						"transactions"
+					]
+				}
+			},
+			"response": []
+		}
+	],
+	"protocolProfileBehavior": {}
+}
