@@ -84,5 +84,22 @@ module.exports = {
           (record) => transactions.mirrorDynamoDataToSql(record.dynamodb, database)
         )
     )
+  },
+
+  /**
+   * Generates a config for the static files in the S3 bucket
+   */
+  generateFrontendConfig: async () => {
+    const AWS = require('aws-sdk')
+    const s3 = new AWS.S3()
+    return s3.putObject({
+      Bucket: process.env.S3_BUCKET_FRONTEND,
+      Key: 'config.json',
+      Body: JSON.stringify({
+        importerBucket: process.env.S3_BUCKET_IMPORTER,
+        region: process.env.REGION,
+        restUrl: `https://${process.env.APIGW_ID}.execute-api.${process.env.REGION}.amazonaws.com/${process.env.STAGE}/`
+      })
+    }).promise()
   }
 }

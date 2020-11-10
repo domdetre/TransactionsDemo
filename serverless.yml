@@ -18,7 +18,7 @@ custom:
   assets:
     auto: true
     targets:
-      - bucket: ${self:provider.stackName}-frontend-bucket
+      - bucket: ${self:provider.s3.frontend.name}
         files:
         - source: source/frontend/
           globs: '**/*'
@@ -29,6 +29,13 @@ provider:
   stage: ${opt:stage, 'dev'}
   stackName: ${self:service}-${self:provider.stage}
   timeout: 30
+  apiGateway: 
+    shouldStartNameWithService: true
+  s3:
+    frontend:
+      name: ${self:provider.stackName}-frontend-bucket
+      websiteConfiguration:
+        IndexDocument: index.html
 
   iamRoleStatements:
     - Effect: Allow
@@ -53,6 +60,11 @@ provider:
             - '*'
     - Effect: Allow
       Action:
+        - s3:PutObject
+      Resource:
+        arn:aws:s3:::${self:provider.s3.frontend.name}/*
+    - Effect: Allow
+      Action:
         - sqs:SendMessage
       Resource:
         Fn::GetAtt: [DataImportQueue, Arn]
@@ -62,6 +74,7 @@ provider:
       Ref: TransactionsTable
     S3_BUCKET_IMPORTER: 
       Ref: ImporterBucket
+    S3_BUCKET_FRONTEND: ${self:provider.s3.frontend.name}
     QUEUE_IMPORT_DATA:
       Ref: DataImportQueue
     RDS_HOST:     
@@ -70,6 +83,10 @@ provider:
     RDS_USER: ${self:custom.rds.database.user}
     RDS_PASS: 
       Fn::Sub: '{{resolve:secretsmanager:${TransactionsDatabaseSecret}::password}}'
+    REGION: ${self:provider.region}
+    APIGW_ID:
+      Ref: ApiGatewayRestApi
+    STAGE: ${self:provider.stage}
 
 layers:
   NodeJs:
@@ -144,6 +161,17 @@ functions:
           arn:
             Fn::GetAtt: [TransactionsTable, StreamArn]
 
+  generateFrontendConfig:
+    handler: source/nodejs/handlers.generateFrontendConfig
+    layers:
+      - { Ref: NodeJsLambdaLayer }
+    events:
+      - s3:
+          bucket: frontend
+          event: s3:ObjectCreated:*
+          rules:
+            - suffix: .html
+
 resources:
   Resources:
 
@@ -158,18 +186,11 @@ resources:
             ToPort: 3306
             CidrIp: 0.0.0.0/0
 
-    FrontendBucket:
-      Type: AWS::S3::Bucket
-      Properties:
-        BucketName: ${self:provider.stackName}-frontend-bucket
-        WebsiteConfiguration:
-          IndexDocument: index.html
-
-    FrontendBucketPolicy:
+    S3BucketFrontendPolicy:
       Type: 'AWS::S3::BucketPolicy'
       Properties:
         Bucket:
-          Ref: FrontendBucket
+          Ref: S3BucketFrontend
         PolicyDocument:
           Statement:
             - Effect: Allow
@@ -178,7 +199,7 @@ resources:
               Resource:
                 Fn::Join:
                   - '/'
-                  - - { Fn::GetAtt: [FrontendBucket, Arn] }
+                  - - { Fn::GetAtt: [S3BucketFrontend, Arn] }
                     - '*'
               Principal: '*'
 

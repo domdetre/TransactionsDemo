@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "docker-compose run --rm node npx jest"
+    "test": "docker-compose run --rm node npx jest",
+    "deploy": "docker-compose run --rm node npx sls deploy"
   },
   "author": "Detre Dominuis <dominusdetre@gmail.com>",
   "license": "GPL-3.0-only",
