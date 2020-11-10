@@ -83,14 +83,19 @@
 
   When calculating daily positions for an entity and for a specific day the entity and the date is supplied. Then the lambda queries both the main table and the GSI concurrently. The first set of results will be the items where the entity was the party and the second one will be the items where it was the counterparty. Then it calculates the daily position with the 2 sets of data.
 
-## Caveats
+## Notes
 
   - The service cannot handle too big files due to the limitations of Lambda  
-    Currently lambda has 15 minute and 3 gig ram limitation. As a result it cannot read big files in one go. There are different ideas to solve it:
+    Currently lambda has 15 minute and 3 gig ram limitations. As a result it cannot read big files in one go. There are different ideas to solve it:
     - retrieve file by small segments sequentially  
-      This allows to overcome the memory limitations, but still has a time limit. Also due to the segments the last line of data will be cut in half and the second half of that line will be in the next segment. Causing the data to be fragmented and handling those fragments can be fiddly.
+      This allows us to overcome the memory limitations, but still has a time limit. Also due to the segments the last line of data will be cut in half and the second half of that line will be in the next segment. Causing the data to be fragmented and handling those fragments can be fiddly.
     - retrieve file by small segments and put it in another queue for parallel processing  
       This both allows to overcome both the memory and time limit and also improves performance for big files, however requires another queue+lambda solution to be present. Also it has the same problem with fragmentation as the previous solution.
-      With insanely huge files this can timeout as well, but for such situation a simple service such this shouldn't be used.
+      With insanely huge files this can timeout as well, but for such situations a simple service such this shouldn't be used.
     - Use ElasticBeanstalk Worker tier  
-      EB worker is fully managed and can run nodejs. This allows to overcome both the memroy and time limitation, since here both are virtually infinite. Although this is more costly, since EB has to run at least 1 instance all the time and with a huge instance it could result a pricey minimal running cost, even when not processing a thing.
+      EB worker is fully managed and can run nodejs. This allows us to overcome both the memory and time limitation, since here both are virtually infinite. Although this is more costly, since EB has to run at least 1 instance all the time and with a huge instance it could result in a pricey minimal running cost, even when not processing a thing.
+
+  - Calculating daily positions with millions of records could end up with costly calculations made by each request.  
+    This can be improved by using some sort of cache on demand.  
+    The results of each new calculation can be cached somewhere, so the next time it can be quickly returned instead of recalculating.  
+    Although the problem is when you need to insert a new item, the caches made for the days following the item's date need to be invalidated.
